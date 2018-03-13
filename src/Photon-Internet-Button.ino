@@ -1,5 +1,12 @@
 // This #include statement was automatically added by the Particle IDE.
 #include "InternetButton/InternetButton.h"
+// Web Sockets
+#include "application.h"
+#include "Connection/Spark-Websockets.h"
+#include "Particle.h"
+#include "softap_http.h"
+#include <string.h>
+
 InternetButton b = InternetButton();
 // ---- Air Quality Index ----
 int AirQual []= {0,0,0};
@@ -12,12 +19,109 @@ unsigned long startTime = 0;
 int ledNum = 0;
 bool checkFlag = false;
 bool subFlag = false;
+bool stopAlarm = false;
+
+// ---- Websockets ----
+WebSocketClient client;
+char* routerIP;
+int routerPort = 80;
+int counter = 0;
+
+void printStatement(){
+  Serial.println("CALLBACK-------");
+  counter=0;
+}
+
+void onMessage(WebSocketClient client, char* message)
+ {
+   Serial.println("Message");
+   String msg = String(message);
+   if(msg == "ALARM_ON"){
+     alarmTrigger;
+   } else if (msg == "ALARM_OFF"){
+     stopAlarm = true;
+   }
+}
+
+void onConnection(const char* url, ResponseCallback* cb, void* cbArg, Reader* body, Writer* result, void* reserved)
+ {
+   char* data = body->fetch_as_string();
+   if(String(url).compareTo(String("/wifi")) == 0  && String(data).compareTo(String("")) != 0)
+   {
+     Serial.begin(9600);
+     Serial.println("DATA: " + String(data));
+     const char delimiter[2] = "\t";
+     char* ssid = strtok(data, delimiter);
+     char* pass = strtok(NULL, delimiter);
+     char* ip = strtok(NULL, delimiter);
+     Serial.println("URL: " + String(url));
+     Serial.println("SSID: " + String(ssid));
+     Serial.println("Pass: " + String(pass));
+     Serial.println("IP: " + String(ip));
+     writeIPToEEPROM( ip);
+     cb(cbArg, 0, 200, "text/html", nullptr);
+     Serial.println("\nmatch");
+     WiFi.clearCredentials();
+     WiFi.setCredentials(ssid, pass);
+     WiFi.listen(false);
+   }
+   else
+   {
+     cb(cbArg, 0, 404, "text/html", nullptr);
+   }
+ }
+ STARTUP(softap_set_application_page_handler(onConnection, nullptr));
+
+ // Write to Memory, addr should be 0
+ void writeIPToEEPROM(char* IP)
+ {
+   int addr = 0;
+   // You can get and put simple values like int, long, bool, etc. using get and put directly
+   for(int i = 0; IP[i] != '\0'; i++)
+   {
+     EEPROM.put(addr, IP[i]);
+     addr += sizeof(char); //keep writing
+   }
+   char end =  '\0';
+   EEPROM.put(addr,  end);
+ }
+
+ // Read From memory
+ char* readIPFromEEPROM()
+ {
+   int addr = 0;
+   char ip[16];
+   char ch = 'a';
+   // You can get and put simple values like int, long, bool, etc. using get and put directly
+   while(ch != '\0')
+   {
+     EEPROM.get(addr, ch);
+     ip[addr] = ch;
+     addr += sizeof(char);
+   }
+   ip[addr]= '\0';
+   char *ret = (char*) malloc(16);
+   for(int i = 0; i < addr; ++i)
+         ret[i] =ip[i];
+   return ret;
+ }
 
 void setup() {
   Serial.begin(9600);
   b.begin();
   b.allLedsOff();
   initTimer();
+
+  // Websockets
+  Serial.println(String("IP: ") + String(readIPFromEEPROM()));
+  routerIP = readIPFromEEPROM();
+
+  routerIP = "192.168.0.133";              // EDIT THIS
+
+  client.connect(routerIP,8000,&printStatement);
+  client.onMessage(onMessage);
+  delay(3000);
+
   // Subscribe to the webhook response event
   Particle.subscribe("hook-response/AQI", myHandler, MY_DEVICES);
   RGB.control(true);
@@ -55,8 +159,8 @@ void loop() {
 }
 
 void timerMain(){
-  while(b.buttonOn(3) == 0){
-    if(millis()-startTime > 750UL && checkFlag){//750UL = .75seconds, ex: 327000UL = 5.45 minutes (at 5.45 minutes this will make a work session around 45 minutes with a 15 minute break)
+  while(b.buttonOn(3) == 0 && stopAlarm == false){
+    if(millis()-startTime > 550UL && checkFlag){//750UL = .75seconds, ex: 327000UL = 5.45 minutes (at 5.45 minutes this will make a work session around 45 minutes with a 15 minute break)
         if(ledNum > 10){
             checkFlag = false;
             subFlag = true;
@@ -72,6 +176,7 @@ void timerMain(){
   }
   b.allLedsOff();
   initTimer();
+  stopAlarm = false;
 }//timerMain() is end of "work" cycle
 
 void alarmOn(){
@@ -90,12 +195,22 @@ void initTimer(){
     subFlag = false;
 }//initializing function for variables
 
+void sendButton(String buttonNumber){
+  String toSend = "{\"button\":";
+  toSend += buttonNumber + "}";
+  char charBuf[toSend.length()+1];
+  toSend.toCharArray(charBuf, toSend.length()+1);
+  Serial.println(charBuf);
+  client.send(charBuf);
+}
+
 void checkButton(){
   if(b.buttonOn(1)){
     b.allLedsOff();
     b.ledOn(1, 15, 0, 0);
     b.ledOn(11, 15, 0, 0);
     b.playNote("G3",8);
+    sendButton("1");
     b.allLedsOff();
   };
 
@@ -104,6 +219,7 @@ void checkButton(){
     b.ledOn(3, 15, 0, 0);
     b.playNote("G4",8);
     alarmTrigger();
+    sendButton("2");
     b.allLedsOff();
   };
 
@@ -111,6 +227,7 @@ void checkButton(){
     b.allLedsOff();
     b.ledOn(6, 15, 0, 0);
     b.playNote("G5",8);
+    sendButton("3");
     b.allLedsOff();
   };
 
@@ -118,6 +235,7 @@ void checkButton(){
     b.allLedsOff();
     b.ledOn(9, 15, 0, 0);
     b.playNote("G6",8);
+    sendButton("4");
     b.allLedsOff();
   };
 
