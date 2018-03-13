@@ -107,7 +107,6 @@ void onConnection(const char* url, ResponseCallback* cb, void* cbArg, Reader* bo
  }
 
 void setup() {
-  Serial.begin(9600);
   b.begin();
   b.allLedsOff();
   initTimer();
@@ -117,6 +116,7 @@ void setup() {
   routerIP = readIPFromEEPROM();
 
   routerIP = "192.168.0.133";              // EDIT THIS
+  Serial.begin(9600);
 
   client.connect(routerIP,8000,&printStatement);
   client.onMessage(onMessage);
@@ -150,6 +150,7 @@ void myHandler(const char *event, const char *data) {
 
 
 void loop() {
+    client.monitor();
     checkButton();
     if(manualDelayTimer == manualDelayMax){
       airQuality();
